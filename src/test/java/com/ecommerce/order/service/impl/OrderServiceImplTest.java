@@ -1,26 +1,40 @@
 package com.ecommerce.order.service.impl;
 
-import com.ecommerce.common.entity.*;
 import com.ecommerce.common.enums.OrderStatus;
 import com.ecommerce.common.exception.BadRequestException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
-import com.ecommerce.common.repository.*;
 import com.ecommerce.common.util.AppConstants;
+import com.ecommerce.order.client.ProductClient;
 import com.ecommerce.order.client.UserClient;
 import com.ecommerce.order.dto.OrderItemRequestDTO;
 import com.ecommerce.order.dto.OrderRequestDTO;
 import com.ecommerce.order.dto.OrderResponseDTO;
+import com.ecommerce.order.dto.ProductResponseDTO;
 import com.ecommerce.order.dto.UserResponseDTO;
+import com.ecommerce.order.entity.OrderEntity;
+import com.ecommerce.order.entity.OrderItemEntity;
+import com.ecommerce.order.entity.OrderStatusEntity;
+import com.ecommerce.order.entity.StockReduceEntity;
 import com.ecommerce.order.mapper.OrderMapper;
+import com.ecommerce.order.repository.OrderItemRepository;
+import com.ecommerce.order.repository.OrderRepository;
+import com.ecommerce.order.repository.OrderStatusRepository;
+import com.ecommerce.order.repository.StockReduceRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.math.BigDecimal;
-import java.util.*;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -45,10 +59,13 @@ class OrderServiceImplTest {
     private StockReduceRepository stockReduceRepository;
 
     @Mock
-    private ProductRepository productRepository;
+    private UserClient userClient;
 
     @Mock
-    private UserClient userClient;
+    private ProductClient productClient;
+
+    @Mock
+    private StockReduceAuditService stockReduceAuditService;
 
     @InjectMocks
     private OrderServiceImpl orderService;
@@ -57,7 +74,7 @@ class OrderServiceImplTest {
     private UUID orderId;
 
     private UserResponseDTO userResponseDTO;
-    private ProductEntity product;
+    private ProductResponseDTO product;
     private OrderStatusEntity pendingStatus;
     private OrderStatusEntity placedStatus;
     private OrderStatusEntity failedStatus;
@@ -72,7 +89,7 @@ class OrderServiceImplTest {
         userResponseDTO = new UserResponseDTO();
         userResponseDTO.setUserId(userId);
 
-        product = new ProductEntity();
+        product = new ProductResponseDTO();
         product.setProductId(1L);
         product.setName("Laptop");
         product.setPrice(BigDecimal.valueOf(62000));
@@ -86,13 +103,17 @@ class OrderServiceImplTest {
         orderResponseDTO = mock(OrderResponseDTO.class);
     }
 
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
+    }
+
     @Test
     void createOrder_ShouldCreateOrder_WhenRequestIsValid() {
         OrderRequestDTO request = createOrderRequest();
 
         when(userClient.getCurrentUser()).thenReturn(userResponseDTO);
-
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
+        when(productClient.getProductById(1L)).thenReturn(product);
 
         when(orderStatusRepository.findByStatusName(OrderStatus.PENDING.name()))
                 .thenReturn(Optional.of(pendingStatus));
@@ -113,9 +134,6 @@ class OrderServiceImplTest {
         when(stockReduceRepository.save(any(StockReduceEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        when(productRepository.save(any(ProductEntity.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-
         when(orderMapper.toDTO(any(OrderEntity.class), anyList()))
                 .thenReturn(orderResponseDTO);
 
@@ -123,15 +141,15 @@ class OrderServiceImplTest {
 
         assertNotNull(result);
         assertEquals(orderResponseDTO, result);
-        assertEquals(8, product.getQuantity());
 
         verify(userClient).getCurrentUser();
-        verify(productRepository, times(2)).findById(1L);
+        verify(productClient).getProductById(1L);
+        verify(productClient).reduceStock(1L, 2);
         verify(orderRepository, times(2)).save(any(OrderEntity.class));
         verify(orderItemRepository).save(any(OrderItemEntity.class));
         verify(stockReduceRepository, times(2)).save(any(StockReduceEntity.class));
-        verify(productRepository).save(product);
         verify(orderMapper).toDTO(any(OrderEntity.class), anyList());
+        verifyNoInteractions(stockReduceAuditService);
     }
 
     @Test
@@ -148,7 +166,7 @@ class OrderServiceImplTest {
         assertEquals(AppConstants.USER_NOT_FOUND, exception.getMessage());
 
         verify(userClient).getCurrentUser();
-        verifyNoInteractions(productRepository);
+        verifyNoInteractions(productClient);
         verifyNoInteractions(orderRepository);
     }
 
@@ -169,7 +187,7 @@ class OrderServiceImplTest {
         assertEquals(AppConstants.USER_NOT_FOUND, exception.getMessage());
 
         verify(userClient).getCurrentUser();
-        verifyNoInteractions(productRepository);
+        verifyNoInteractions(productClient);
         verifyNoInteractions(orderRepository);
     }
 
@@ -178,7 +196,7 @@ class OrderServiceImplTest {
         OrderRequestDTO request = createOrderRequest();
 
         when(userClient.getCurrentUser()).thenReturn(userResponseDTO);
-        when(productRepository.findById(1L)).thenReturn(Optional.empty());
+        when(productClient.getProductById(1L)).thenReturn(null);
 
         ResourceNotFoundException exception = assertThrows(
                 ResourceNotFoundException.class,
@@ -188,7 +206,7 @@ class OrderServiceImplTest {
         assertEquals(AppConstants.PRODUCT_NOT_FOUND, exception.getMessage());
 
         verify(userClient).getCurrentUser();
-        verify(productRepository).findById(1L);
+        verify(productClient).getProductById(1L);
         verifyNoInteractions(orderRepository);
     }
 
@@ -199,9 +217,7 @@ class OrderServiceImplTest {
         product.setQuantity(1);
 
         when(userClient.getCurrentUser()).thenReturn(userResponseDTO);
-
-        when(productRepository.findById(1L))
-                .thenReturn(Optional.of(product));
+        when(productClient.getProductById(1L)).thenReturn(product);
 
         when(orderStatusRepository.findByStatusName(OrderStatus.PENDING.name()))
                 .thenReturn(Optional.of(pendingStatus));
@@ -215,9 +231,8 @@ class OrderServiceImplTest {
                 .contains(AppConstants.INSUFFICIENT_PRODUCT_QUANTITY));
 
         verify(userClient).getCurrentUser();
-        verify(productRepository).findById(1L);
+        verify(productClient).getProductById(1L);
         verify(orderStatusRepository).findByStatusName(OrderStatus.PENDING.name());
-
         verifyNoInteractions(orderRepository);
     }
 
@@ -225,15 +240,13 @@ class OrderServiceImplTest {
     void createOrder_ShouldReturnFailedOrder_WhenStockReductionFails() {
         OrderRequestDTO request = createOrderRequest();
 
-        when(userClient.getCurrentUser()).thenReturn(userResponseDTO);
+        OrderEntity failedOrder = createOrderEntity(failedStatus);
 
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
+        when(userClient.getCurrentUser()).thenReturn(userResponseDTO);
+        when(productClient.getProductById(1L)).thenReturn(product);
 
         when(orderStatusRepository.findByStatusName(OrderStatus.PENDING.name()))
                 .thenReturn(Optional.of(pendingStatus));
-
-        when(orderStatusRepository.findByStatusName(OrderStatus.FAILED.name()))
-                .thenReturn(Optional.of(failedStatus));
 
         when(orderRepository.save(any(OrderEntity.class)))
                 .thenAnswer(invocation -> {
@@ -248,8 +261,11 @@ class OrderServiceImplTest {
         when(stockReduceRepository.save(any(StockReduceEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        when(productRepository.save(any(ProductEntity.class)))
-                .thenThrow(new RuntimeException("DB error while reducing stock"));
+        doThrow(new RuntimeException("Product service error"))
+                .when(productClient).reduceStock(1L, 2);
+
+        when(stockReduceAuditService.OrderAsFailed(any(OrderEntity.class), anyList()))
+                .thenReturn(failedOrder);
 
         when(orderMapper.toDTO(any(OrderEntity.class), anyList()))
                 .thenReturn(orderResponseDTO);
@@ -259,11 +275,9 @@ class OrderServiceImplTest {
         assertNotNull(result);
         assertEquals(orderResponseDTO, result);
 
-        verify(orderStatusRepository).findByStatusName(OrderStatus.PENDING.name());
-        verify(orderStatusRepository).findByStatusName(OrderStatus.FAILED.name());
-        verify(orderRepository, times(2)).save(any(OrderEntity.class));
-        verify(stockReduceRepository, times(2)).save(any(StockReduceEntity.class));
-        verify(orderMapper).toDTO(any(OrderEntity.class), anyList());
+        verify(productClient).reduceStock(1L, 2);
+        verify(stockReduceAuditService).OrderAsFailed(any(OrderEntity.class), anyList());
+        verify(orderMapper).toDTO(eq(failedOrder), anyList());
     }
 
     @Test
@@ -315,8 +329,6 @@ class OrderServiceImplTest {
     @Test
     void getOrders_ShouldReturnOrdersByCreatedBy_WhenCreatedByFilterGiven() {
         OrderEntity order = createOrderEntity(placedStatus);
-        order.setCreatedBy("kavitaprajapati");
-
         OrderItemEntity item = createOrderItem(order);
 
         when(orderRepository.findByCreatedBy("kavitaprajapati"))
@@ -461,7 +473,9 @@ class OrderServiceImplTest {
     }
 
     @Test
-    void cancelOrder_ShouldCancelOrder_WhenOrderIsValid() {
+    void cancelOrder_ShouldCancelOrder_WhenOrderIsValidAndUserIsOwner() {
+        setAuthentication("kavitaprajapati", "ROLE_USER");
+
         OrderEntity order = createOrderEntity(placedStatus);
         OrderItemEntity item = createOrderItem(order);
 
@@ -485,10 +499,41 @@ class OrderServiceImplTest {
         assertEquals(OrderStatus.CANCELLED.name(), order.getStatus().getStatusName());
 
         verify(orderRepository).findById(orderId);
+        verify(productClient).restoreStock(1L, 2);
         verify(orderStatusRepository).findByStatusName(OrderStatus.CANCELLED.name());
         verify(orderRepository).save(order);
         verify(orderItemRepository).findByOrder(order);
         verify(orderMapper).toDTO(eq(order), anyList());
+    }
+
+    @Test
+    void cancelOrder_ShouldCancelOrder_WhenUserIsAdmin() {
+        setAuthentication("admin", "ROLE_ADMIN");
+
+        OrderEntity order = createOrderEntity(placedStatus);
+        order.setCreatedBy("anotherUser");
+
+        OrderItemEntity item = createOrderItem(order);
+
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(order));
+
+        when(orderStatusRepository.findByStatusName(OrderStatus.CANCELLED.name()))
+                .thenReturn(Optional.of(cancelledStatus));
+
+        when(orderRepository.save(any(OrderEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        when(orderItemRepository.findByOrder(order)).thenReturn(List.of(item));
+
+        when(orderMapper.toDTO(any(OrderEntity.class), anyList()))
+                .thenReturn(orderResponseDTO);
+
+        OrderResponseDTO result = orderService.cancelOrder(orderId);
+
+        assertNotNull(result);
+
+        verify(productClient).restoreStock(1L, 2);
+        verify(orderRepository).save(order);
     }
 
     @Test
@@ -508,7 +553,29 @@ class OrderServiceImplTest {
     }
 
     @Test
+    void cancelOrder_ShouldThrowBadRequestException_WhenCurrentUserIsNotOwner() {
+        setAuthentication("otherUser", "ROLE_USER");
+
+        OrderEntity order = createOrderEntity(placedStatus);
+
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(order));
+
+        BadRequestException exception = assertThrows(
+                BadRequestException.class,
+                () -> orderService.cancelOrder(orderId)
+        );
+
+        assertEquals(AppConstants.NOT_ALLOWED_TO_CANCEL_ORDER, exception.getMessage());
+
+        verify(orderRepository).findById(orderId);
+        verifyNoInteractions(orderStatusRepository);
+        verifyNoInteractions(orderMapper);
+    }
+
+    @Test
     void cancelOrder_ShouldThrowBadRequestException_WhenOrderAlreadyDelivered() {
+        setAuthentication("kavitaprajapati", "ROLE_USER");
+
         OrderStatusEntity deliveredStatus = createStatus(OrderStatus.DELIVERED.name());
         OrderEntity order = createOrderEntity(deliveredStatus);
 
@@ -528,6 +595,8 @@ class OrderServiceImplTest {
 
     @Test
     void cancelOrder_ShouldThrowBadRequestException_WhenOrderAlreadyCancelled() {
+        setAuthentication("kavitaprajapati", "ROLE_USER");
+
         OrderEntity order = createOrderEntity(cancelledStatus);
 
         when(orderRepository.findById(orderId)).thenReturn(Optional.of(order));
@@ -568,14 +637,26 @@ class OrderServiceImplTest {
         order.setStatus(status);
         order.setTotalAmount(BigDecimal.valueOf(124000));
         order.setTotalQuantity(2);
+        order.setCreatedBy("kavitaprajapati");
         return order;
     }
 
     private OrderItemEntity createOrderItem(OrderEntity order) {
         OrderItemEntity item = new OrderItemEntity();
         item.setOrder(order);
-        item.setProduct(product);
+        item.setProductId(1L);
         item.setOrderedQuantity(2);
         return item;
+    }
+
+    private void setAuthentication(String username, String role) {
+        UsernamePasswordAuthenticationToken authentication =
+                new UsernamePasswordAuthenticationToken(
+                        username,
+                        null,
+                        List.of(new SimpleGrantedAuthority(role))
+                );
+
+        SecurityContextHolder.getContext().setAuthentication(authentication);
     }
 }
