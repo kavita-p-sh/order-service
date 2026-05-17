@@ -1,8 +1,6 @@
 package com.ecommerce.order.config;
-
-
+import com.ecommerce.common.security.JwtAuthenticationFilter;
 import com.ecommerce.common.util.JwtConstant;
-import com.ecommerce.order.security.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
