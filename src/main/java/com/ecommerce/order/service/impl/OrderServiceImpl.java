@@ -1,19 +1,23 @@
 package com.ecommerce.order.service.impl;
 
-import com.ecommerce.common.entity.*;
+import com.ecommerce.order.entity.OrderStatusEntity;
 import com.ecommerce.common.enums.OrderStatus;
 import com.ecommerce.common.enums.StockReduceStatus;
 import com.ecommerce.common.exception.BadRequestException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
-import com.ecommerce.common.repository.*;
 import com.ecommerce.common.util.AppConstants;
 import com.ecommerce.common.util.CacheConstant;
+import com.ecommerce.order.client.ProductClient;
 import com.ecommerce.order.client.UserClient;
-import com.ecommerce.order.dto.OrderItemRequestDTO;
-import com.ecommerce.order.dto.OrderRequestDTO;
-import com.ecommerce.order.dto.OrderResponseDTO;
-import com.ecommerce.order.dto.UserResponseDTO;
+import com.ecommerce.order.dto.*;
+import com.ecommerce.order.entity.OrderEntity;
+import com.ecommerce.order.entity.OrderItemEntity;
+import com.ecommerce.order.entity.StockReduceEntity;
 import com.ecommerce.order.mapper.OrderMapper;
+import com.ecommerce.order.repository.OrderItemRepository;
+import com.ecommerce.order.repository.OrderRepository;
+import com.ecommerce.order.repository.OrderStatusRepository;
+import com.ecommerce.order.repository.StockReduceRepository;
 import com.ecommerce.order.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,8 +40,8 @@ public class OrderServiceImpl implements OrderService {
     private final OrderItemRepository orderItemRepository;
     private final OrderMapper orderMapper;
     private final StockReduceRepository stockReduceRepository;
-    private final ProductRepository productRepository;
     private final UserClient userClient;
+    private final ProductClient productClient;
 
     /**
      * Creates a new order for the currently logged-in user.
@@ -61,7 +65,7 @@ public class OrderServiceImpl implements OrderService {
             throw new ResourceNotFoundException(AppConstants.USER_NOT_FOUND);
         }
 
-        Map<Long, ProductEntity> productMap = getProductMap(request.getItems());
+        Map<Long, ProductResponseDTO> productMap = getProductMap(request.getItems());
 
         OrderEntity order = new OrderEntity();
         order.setUserId(user.getUserId());
@@ -112,12 +116,15 @@ public class OrderServiceImpl implements OrderService {
      * @param items order item request list
      * @return map of productId and product entity
      */
-    private Map<Long, ProductEntity> getProductMap(List<OrderItemRequestDTO> items) {
-        Map<Long, ProductEntity> productMap = new HashMap<>();
+    private Map<Long, ProductResponseDTO> getProductMap(List<OrderItemRequestDTO> items) {
+        Map<Long, ProductResponseDTO> productMap = new HashMap<>();
 
         for (OrderItemRequestDTO item : items) {
-            ProductEntity product = productRepository.findById(item.getProductId())
-                    .orElseThrow(() -> new ResourceNotFoundException(AppConstants.PRODUCT_NOT_FOUND));
+            ProductResponseDTO product = productClient.getProductById(item.getProductId());
+
+            if (product == null || product.getProductId() == null) {
+                throw new ResourceNotFoundException(AppConstants.PRODUCT_NOT_FOUND);
+            }
 
             productMap.put(product.getProductId(), product);
         }
@@ -133,14 +140,14 @@ public class OrderServiceImpl implements OrderService {
      * @param order order entity
      */
     private void setOrderTotals(List<OrderItemRequestDTO> items,
-                                Map<Long, ProductEntity> productMap,
+                                Map<Long, ProductResponseDTO> productMap,
                                 OrderEntity order) {
 
         BigDecimal totalAmount = BigDecimal.ZERO;
         int totalQuantity = 0;
 
         for (OrderItemRequestDTO item : items) {
-            ProductEntity product = productMap.get(item.getProductId());
+            ProductResponseDTO product = productMap.get(item.getProductId());
 
             if (product.getQuantity() < item.getOrderedQuantity()) {
                 throw new BadRequestException(
@@ -169,13 +176,13 @@ public class OrderServiceImpl implements OrderService {
      */
     private List<OrderItemEntity> saveOrderItems(List<OrderItemRequestDTO> items,
                                                  OrderEntity order,
-                                                 Map<Long, ProductEntity> productMap) {
+                                                 Map<Long, ProductResponseDTO> productMap) {
 
         return items.stream()
                 .map(item -> {
                     OrderItemEntity orderItem = new OrderItemEntity();
                     orderItem.setOrder(order);
-                    orderItem.setProduct(productMap.get(item.getProductId()));
+                    orderItem.setProductId(item.getProductId());
                     orderItem.setOrderedQuantity(item.getOrderedQuantity());
 
                     return orderItemRepository.save(orderItem);
@@ -191,10 +198,10 @@ public class OrderServiceImpl implements OrderService {
      */
 
     private void reduceProductStock(List<OrderItemRequestDTO> items,
-                                    Map<Long, ProductEntity> productMap) {
+                                    Map<Long, ProductResponseDTO> productMap) {
 
         for (OrderItemRequestDTO item : items) {
-            ProductEntity product = productMap.get(item.getProductId());
+            ProductResponseDTO product = productMap.get(item.getProductId());
 
             if (item.getOrderedQuantity() == null || item.getOrderedQuantity() <= 0) {
                 throw new BadRequestException(AppConstants.INSUFFICIENT_PRODUCT_QUANTITY);
@@ -205,7 +212,7 @@ public class OrderServiceImpl implements OrderService {
             }
 
             product.setQuantity(product.getQuantity() - item.getOrderedQuantity());
-            productRepository.save(product);
+            productClient.reduceStock(item.getProductId(), item.getOrderedQuantity());
 
       }
     }
@@ -224,8 +231,7 @@ public class OrderServiceImpl implements OrderService {
                     StockReduceEntity stockReduce = new StockReduceEntity();
 
                     stockReduce.setOrder(order);
-                    stockReduce.setProduct(productRepository.findById(item.getProductId())
-                            .orElseThrow(() -> new ResourceNotFoundException(AppConstants.PRODUCT_NOT_FOUND)));
+                    stockReduce.setProductId(item.getProductId());
                     stockReduce.setQuantity(item.getOrderedQuantity());
                     stockReduce.setStatus(StockReduceStatus.PENDING);
 
@@ -277,6 +283,7 @@ public class OrderServiceImpl implements OrderService {
      * @param orders order entity list
      * @return order response list
      */
+
     private List<OrderResponseDTO> mapOrdersToDTO(List<OrderEntity> orders) {
         Map<UUID, List<OrderItemEntity>> orderItemsMap = getOrderItemsMap(orders);
 
@@ -287,7 +294,6 @@ public class OrderServiceImpl implements OrderService {
                 ))
                 .toList();
     }
-
     /**
      * Fetches orders using optional filters.
      *

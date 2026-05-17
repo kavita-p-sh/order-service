@@ -79,6 +79,50 @@ public class ProductClient {
         }
     }
 
+    /**
+     * Calls product-service to reduce product stock.
+     */
+    public void reduceStock(Long productId, Integer quantity) {
+        String url = productServiceUrl + "/" + productId + "/reduce-stock?quantity=" + quantity;
+
+        try {
+            restTemplate.exchange(
+                    url,
+                    HttpMethod.PUT,
+                    createRequestEntity(),
+                    Void.class
+            );
+
+        } catch (HttpClientErrorException.NotFound ex) {
+            log.error("Product not found while reducing stock. ProductId: {}", productId);
+            throw new ResourceNotFoundException(AppConstants.PRODUCT_NOT_FOUND);
+
+        } catch (HttpClientErrorException.BadRequest ex) {
+            log.error("Invalid stock reduce request. ProductId: {}, Quantity: {}, Response: {}",
+                    productId, quantity, ex.getResponseBodyAsString());
+            throw new BadRequestException(AppConstants.PRODUCT_QUANTITY_INVALID);
+
+        } catch (HttpClientErrorException.Unauthorized ex) {
+            log.error("Unauthorized request while reducing stock. ProductId: {}", productId);
+            throw new BadRequestException(AppConstants.UNAUTHORIZED_PRODUCT_SERVICE);
+
+        } catch (HttpClientErrorException.Forbidden ex) {
+            log.error("Forbidden request while reducing stock. ProductId: {}", productId);
+            throw new BadRequestException(AppConstants.PRODUCT_SERVICE_ACCESS_DENIED);
+
+        } catch (HttpServerErrorException ex) {
+            log.error("Product-service server error while reducing stock. ProductId: {}", productId, ex);
+            throw new RuntimeException(AppConstants.PRODUCT_SERVICE_NOT_AVAILABLE);
+
+        } catch (ResourceAccessException ex) {
+            log.error("Unable to connect to product-service while reducing stock. ProductId: {}", productId, ex);
+            throw new RuntimeException(AppConstants.PRODUCT_SERVICE_CONNECTION_FAILED);
+
+        } catch (Exception ex) {
+            log.error("Unexpected error while reducing stock. ProductId: {}", productId, ex);
+            throw new RuntimeException(AppConstants.PRODUCT_STOCK_REDUCE_FAILED);
+        }
+    }
 
     /**
      * Create HTTP entity with Authorization header.

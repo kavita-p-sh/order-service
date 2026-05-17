@@ -2,11 +2,11 @@ package com.ecommerce.order.mapper;
 
 
 
-import com.ecommerce.common.entity.OrderEntity;
-import com.ecommerce.common.entity.OrderItemEntity;
 import com.ecommerce.order.dto.OrderItemResponseDTO;
 import com.ecommerce.order.dto.OrderResponseDTO;
 
+import com.ecommerce.order.entity.OrderEntity;
+import com.ecommerce.order.entity.OrderItemEntity;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -33,8 +33,8 @@ public class OrderMapper {
         response.setTotalQuantity(order.getTotalQuantity());
         response.setStatus(order.getStatus().getStatusName());
         response.setCreatedBy(order.getCreatedBy());
-        response.setCreatedTimestamp(order.getCreatedTimestamp());
-        response.setUpdatedTimestamp(order.getUpdatedTimestamp());
+        response.setCreatedTimestamp(order.getCreatedDate());
+        response.setUpdatedTimestamp(order.getUpdatedDate());
         response.setUpdatedBy(order.getUpdatedBy());
 
         response.setItems(mapOrderItemsToDTO(items));
