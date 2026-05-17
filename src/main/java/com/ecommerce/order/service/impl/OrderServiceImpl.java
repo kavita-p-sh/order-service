@@ -1,5 +1,6 @@
 package com.ecommerce.order.service.impl;
 
+import com.ecommerce.order.service.impl.StockReduceAuditService;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import com.ecommerce.order.entity.OrderStatusEntity;
@@ -44,6 +45,7 @@ public class OrderServiceImpl implements OrderService {
     private final StockReduceRepository stockReduceRepository;
     private final UserClient userClient;
     private final ProductClient productClient;
+    private final StockReduceAuditService stockReduceAuditService;
 
     /**
      * Creates a new order for the currently logged-in user.
@@ -82,9 +84,10 @@ public class OrderServiceImpl implements OrderService {
 
         List<StockReduceEntity> stockReduceRecords =
                 createStockReduceRecords(savedOrder, request.getItems());
+        List<OrderItemRequestDTO> reducedItems = new ArrayList<>();
 
         try {
-            reduceProductStock(request.getItems(), productMap);
+            reducedItems = reduceProductStock(request.getItems(), productMap);
 
             updateStockReduceStatus(stockReduceRecords, StockReduceStatus.SUCCESS);
 
@@ -100,11 +103,10 @@ public class OrderServiceImpl implements OrderService {
 
             log.error("Stock reduction failed for order id: {}", savedOrder.getOrderId(), ex);
 
-            updateStockReduceStatus(stockReduceRecords, StockReduceStatus.FAILED);
+            restoreReducedStock(reducedItems);
 
-            savedOrder.setStatus(getOrderStatus(OrderStatus.FAILED.name()));
-
-            OrderEntity failedOrder = orderRepository.save(savedOrder);
+            OrderEntity failedOrder =
+                    stockReduceAuditService.OrderAsFailed(savedOrder, stockReduceRecords);
 
             return orderMapper.toDTO(failedOrder, savedItems);
 
@@ -119,16 +121,25 @@ public class OrderServiceImpl implements OrderService {
      * @return map of productId and product entity
      */
     private Map<Long, ProductResponseDTO> getProductMap(List<OrderItemRequestDTO> items) {
+
+        Set<Long> productIds = items.stream()
+                .map(OrderItemRequestDTO::getProductId)
+                .collect(Collectors.toSet());
+
         Map<Long, ProductResponseDTO> productMap = new HashMap<>();
 
-        for (OrderItemRequestDTO item : items) {
-            ProductResponseDTO product = productClient.getProductById(item.getProductId());
+        for (Long productId : productIds) {
+            ProductResponseDTO product = productClient.getProductById(productId);
 
             if (product == null || product.getProductId() == null) {
                 throw new ResourceNotFoundException(AppConstants.PRODUCT_NOT_FOUND);
             }
 
             productMap.put(product.getProductId(), product);
+        }
+
+        if (productMap.size() != productIds.size()) {
+            throw new ResourceNotFoundException(AppConstants.PRODUCT_NOT_FOUND);
         }
 
         return productMap;
@@ -199,8 +210,11 @@ public class OrderServiceImpl implements OrderService {
      * @param productMap map of products
      */
 
-    private void reduceProductStock(List<OrderItemRequestDTO> items,
-                                    Map<Long, ProductResponseDTO> productMap) {
+    private List<OrderItemRequestDTO> reduceProductStock(List<OrderItemRequestDTO> items,
+                                                         Map<Long, ProductResponseDTO> productMap) {
+
+        List<OrderItemRequestDTO> reducedItems = new ArrayList<>();
+
 
         for (OrderItemRequestDTO item : items) {
             ProductResponseDTO product = productMap.get(item.getProductId());
@@ -213,10 +227,12 @@ public class OrderServiceImpl implements OrderService {
                 throw new BadRequestException(AppConstants.PRODUCT_QUANTITY_INVALID);
             }
 
-            product.setQuantity(product.getQuantity() - item.getOrderedQuantity());
             productClient.reduceStock(item.getProductId(), item.getOrderedQuantity());
+            reducedItems.add(item);
 
-      }
+        }
+        return reducedItems;
+
     }
     /**
      * Creates stock reduction records for tracking.
@@ -450,6 +466,21 @@ public class OrderServiceImpl implements OrderService {
     private void restoreProductStock(List<OrderItemEntity> orderItems) {
         for (OrderItemEntity item : orderItems) {
             productClient.restoreStock(item.getProductId(), item.getOrderedQuantity());
+        }
+    }
+
+    private void restoreReducedStock(List<OrderItemRequestDTO> reducedItems) {
+        for (OrderItemRequestDTO item : reducedItems) {
+            try {
+                productClient.restoreStock(item.getProductId(), item.getOrderedQuantity());
+            } catch (Exception restoreEx) {
+                log.error(
+                        "Failed to restore stock for productId: {}, quantity: {}",
+                        item.getProductId(),
+                        item.getOrderedQuantity(),
+                        restoreEx
+                );
+            }
         }
     }
 
