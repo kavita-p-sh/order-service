@@ -20,6 +20,9 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import com.ecommerce.common.exception.ServiceUnavailableException;
+import com.ecommerce.common.exception.UnauthorizedException;
+import com.ecommerce.common.exception.UpstreamServerException;
 
 @Component
 @RequiredArgsConstructor
@@ -58,7 +61,7 @@ public class ProductClient {
 
         } catch (HttpClientErrorException.Unauthorized ex) {
             log.error("Unauthorized request while fetching product. ProductId: {}", productId);
-            throw new BadRequestException(AppConstants.UNAUTHORIZED_PRODUCT_SERVICE);
+            throw new UnauthorizedException(AppConstants.UNAUTHORIZED_PRODUCT_SERVICE);
 
         } catch (HttpClientErrorException.Forbidden ex) {
             log.error("Forbidden request while fetching product. ProductId: {}", productId);
@@ -67,15 +70,12 @@ public class ProductClient {
         } catch (HttpServerErrorException ex) {
             log.error("Product-service server error while fetching product. ProductId: {}",
                     productId, ex);
-            throw new RuntimeException(AppConstants.PRODUCT_SERVICE_NOT_AVAILABLE);
+            throw new UpstreamServerException(AppConstants.PRODUCT_SERVICE_NOT_AVAILABLE);
 
         } catch (ResourceAccessException ex) {
             log.error("Unable to connect to product-service. ProductId: {}", productId, ex);
-            throw new RuntimeException(AppConstants.PRODUCT_SERVICE_CONNECTION_FAILED);
+            throw new ServiceUnavailableException(AppConstants.PRODUCT_SERVICE_CONNECTION_FAILED);
 
-        } catch (Exception ex) {
-            log.error("Unexpected error while fetching product. ProductId: {}", productId, ex);
-            throw new RuntimeException(AppConstants.PRODUCT_FETCH_FAILED);
         }
     }
 
@@ -188,7 +188,7 @@ public class ProductClient {
 
         if (attributes == null) {
             log.error("Request context not found while calling product-service");
-            throw new BadRequestException(AppConstants.REQUEST_CONTEXT_NOT_FOUND);
+            throw new UnauthorizedException(AppConstants.AUTHORIZATION_TOKEN_MISSING);
         }
 
         HttpServletRequest request = attributes.getRequest();
@@ -196,7 +196,7 @@ public class ProductClient {
 
         if (authHeader == null || !authHeader.startsWith(JwtConstant.TOKEN_PREFIX)) {
             log.error("Authorization token missing while calling product-service");
-            throw new BadRequestException(AppConstants.AUTHORIZATION_TOKEN_MISSING);
+            throw new UnauthorizedException(AppConstants.AUTHORIZATION_TOKEN_MISSING);
         }
 
         return authHeader.substring(JwtConstant.TOKEN_PREFIX.length());

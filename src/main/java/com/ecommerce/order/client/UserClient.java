@@ -1,6 +1,9 @@
 package com.ecommerce.order.client;
 
 import com.ecommerce.common.exception.ResourceNotFoundException;
+import com.ecommerce.common.exception.ServiceUnavailableException;
+import com.ecommerce.common.exception.UnauthorizedException;
+import com.ecommerce.common.exception.UpstreamServerException;
 import com.ecommerce.common.util.AppConstants;
 import com.ecommerce.common.util.JwtConstant;
 import com.ecommerce.order.dto.UserResponseDTO;
@@ -13,6 +16,9 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -61,11 +67,25 @@ public class UserClient {
 
             return response.getBody();
 
-        } catch (Exception ex) {
-            log.error("Failed to fetch user from user-service for userId: {}", userId, ex);
+        } catch (HttpClientErrorException.NotFound ex) {
+            log.error("User not found in user-service. UserId: {}", userId);
             throw new ResourceNotFoundException(AppConstants.USER_NOT_FOUND);
+
+        } catch (HttpClientErrorException.Unauthorized ex) {
+            log.error("Unauthorized request while fetching user. UserId: {}", userId);
+            throw new UnauthorizedException(AppConstants.AUTHORIZATION_TOKEN_MISSING);
+
+        } catch (HttpServerErrorException ex) {
+            log.error("User-service server error while fetching user. UserId: {}", userId, ex);
+            throw new UpstreamServerException(AppConstants.USER_SERVICE_NOT_AVAILABLE);
+
+        } catch (ResourceAccessException ex) {
+            log.error("Unable to connect to user-service. UserId: {}", userId, ex);
+            throw new ServiceUnavailableException(AppConstants.USER_SERVICE_CONNECTION_FAILED);
         }
     }
+
+
 
     /**
      * Fetches currently logged-in user by forwarding JWT token to user-service.
@@ -91,10 +111,22 @@ public class UserClient {
 
             return response.getBody();
 
-        } catch (Exception ex) {
-            log.error("Failed to fetch current user from user-service", ex);
-            throw new ResourceNotFoundException(AppConstants.USER_NOT_FOUND);
-        }
+        } catch (HttpClientErrorException.NotFound ex) {
+        log.error("Current user not found in user-service");
+        throw new ResourceNotFoundException(AppConstants.USER_NOT_FOUND);
+
+    } catch (HttpClientErrorException.Unauthorized ex) {
+        log.error("Unauthorized request while fetching current user");
+        throw new UnauthorizedException(AppConstants.AUTHORIZATION_TOKEN_MISSING);
+
+    } catch (HttpServerErrorException ex) {
+        log.error("User-service server error while fetching current user", ex);
+        throw new UpstreamServerException(AppConstants.USER_SERVICE_NOT_AVAILABLE);
+
+    } catch (ResourceAccessException ex) {
+        log.error("Unable to connect to user-service while fetching current user", ex);
+        throw new ServiceUnavailableException(AppConstants.USER_SERVICE_CONNECTION_FAILED);
+    }
     }
 
     /**
@@ -110,7 +142,7 @@ public class UserClient {
 
         if (attributes == null) {
             log.error("No request attributes found while creating auth headers");
-            throw new ResourceNotFoundException(AppConstants.USER_NOT_FOUND);
+            throw new UnauthorizedException(AppConstants.AUTHORIZATION_TOKEN_MISSING);
         }
 
         HttpServletRequest request = attributes.getRequest();
@@ -118,7 +150,7 @@ public class UserClient {
 
         if (authHeader == null || !authHeader.startsWith(JwtConstant.TOKEN_PREFIX)) {
             log.error("Authorization header is missing or invalid");
-            throw new ResourceNotFoundException(AppConstants.USER_NOT_FOUND);
+            throw new UnauthorizedException(AppConstants.AUTHORIZATION_TOKEN_MISSING);
         }
 
         HttpHeaders headers = new HttpHeaders();
