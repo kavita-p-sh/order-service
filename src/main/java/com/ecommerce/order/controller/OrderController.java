@@ -153,11 +153,11 @@ public class OrderController {
             @ApiResponse(responseCode = "404", description = "Order not found")
     })
     public ResponseEntity<OrderResponseDTO> cancelOrder(@PathVariable UUID orderId) {
-        log.warn("Cancelling order with id {}");
+        log.warn("Cancelling order with id {}",orderId);
 
         OrderResponseDTO response=orderService.cancelOrder(orderId);
 
-        log.info("Order cancelled successfully with id {}");
+        log.info("Order cancelled successfully with id {}",orderId);
 
         return ResponseEntity.ok(response);
     }
