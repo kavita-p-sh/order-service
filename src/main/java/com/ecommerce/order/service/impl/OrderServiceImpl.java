@@ -1,5 +1,7 @@
 package com.ecommerce.order.service.impl;
 
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import com.ecommerce.order.entity.OrderStatusEntity;
 import com.ecommerce.common.enums.OrderStatus;
 import com.ecommerce.common.enums.StockReduceStatus;
@@ -369,7 +371,7 @@ public class OrderServiceImpl implements OrderService {
      */
     @Override
     @Transactional(readOnly = true)
-    @Cacheable(value = CacheConstant.ORDERS, key =" #username")
+    @Cacheable(value = CacheConstant.ORDERS, key =CacheConstant.ORDERS_BY_USER_KEY)
     public List<OrderResponseDTO> getCurrentUserOrders() {
         UserResponseDTO user = userClient.getCurrentUser();
 
@@ -394,6 +396,8 @@ public class OrderServiceImpl implements OrderService {
         OrderEntity order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException(AppConstants.ORDER_NOT_FOUND));
 
+        validateCancelPermission(order);
+
         if (OrderStatus.DELIVERED.name().equals(order.getStatus().getStatusName())) {
             throw new BadRequestException(AppConstants.CANNOT_CANCEL);
         }
@@ -402,11 +406,52 @@ public class OrderServiceImpl implements OrderService {
             throw new BadRequestException(AppConstants.ORDER_ALREADY_CANCELLED);
         }
 
+        List<OrderItemEntity> orderItems = orderItemRepository.findByOrder(order);
+
+        if (OrderStatus.PLACED.name().equals(order.getStatus().getStatusName())) {
+            restoreProductStock(orderItems);
+        }
+
         order.setStatus(getOrderStatus(OrderStatus.CANCELLED.name()));
 
         return orderMapper.toDTO(
                 orderRepository.save(order),
-                orderItemRepository.findByOrder(order)
+                orderItems
         );
     }
+    /**
+     * Validates whether current user can cancel the order.
+     * Admin can cancel any order, normal user can cancel only their own order.
+     */
+    private void validateCancelPermission(OrderEntity order) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+        if (authentication == null || authentication.getName() == null) {
+            throw new BadRequestException(AppConstants.NOT_ALLOWED_TO_CANCEL_ORDER);
+        }
+
+        String currentUsername = authentication.getName();
+
+        boolean isAdmin = authentication.getAuthorities().stream()
+                .anyMatch(authority ->
+                        AppConstants.ROLE_ADMIN.equals(authority.getAuthority())
+                                || "ROLE_ADMIN".equals(authority.getAuthority())
+                                || "ADMIN".equals(authority.getAuthority())
+                );
+
+        if (!isAdmin && !currentUsername.equals(order.getCreatedBy())) {
+            throw new BadRequestException(AppConstants.NOT_ALLOWED_TO_CANCEL_ORDER);
+        }
+    }
+
+    /**
+     * Restores product stock when a placed order is cancelled.
+     */
+    private void restoreProductStock(List<OrderItemEntity> orderItems) {
+        for (OrderItemEntity item : orderItems) {
+            productClient.restoreStock(item.getProductId(), item.getOrderedQuantity());
+        }
+    }
+
+
 }
