@@ -110,11 +110,26 @@ spring.data.redis.host=localhost
 spring.data.redis.port=6379
 
 # Service URLs
-user.service.url=http://localhost:8095/api/users
-product.service.url=http://localhost:8097/api/products
-```
+# Local development URLs.
 
-____________________________________________________________________________________________________
+user.service.url=${USER_SERVICE_URL:http://localhost:8095/api/users}
+product.service.url=${PRODUCT_SERVICE_URL:http://localhost:8097/api/products}
+```
+-----------------------------------------------------------------------------
+
+## Required Common Library Setup
+
+This service depends on the `ecommerce-common` library.
+Because `ecommerce-common` is in a separate repository, it must be installed into the local Maven repository before building this service.
+
+```xml
+<dependency>
+    <groupId>com.ecommerce</groupId>
+    <artifactId>ecommerce-common</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+</dependency>
+```
+----------------------------------------------------------------------------------
 ## Build Project
 
 ```bash
@@ -173,9 +188,16 @@ Purpose:
 - Fetch product details
 - Validate product quantity
 - Reduce product stock during order creation
+------------------------------------------------------------------------------------------
+### Service URL Contract
 
----
+For local development, order-service can use localhost URLs:
 
+```properties
+USER_SERVICE_URL=http://localhost:8095/api/users
+PRODUCT_SERVICE_URL=http://localhost:8097/api/products
+```
+---------------------------------------------------------------------------------------
 ## Security
 
 - JWT-based authentication
